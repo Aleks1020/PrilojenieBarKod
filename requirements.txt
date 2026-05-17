@@ -1,9 +1,6 @@
-flask
-pyzbar
-opencv-python
-requests
-easyocr
+streamlit
 numpy
-Pillow
-torch
-torchvision
+pillow
+opencv-python-headless
+pandas
+pytesseract
