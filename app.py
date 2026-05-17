@@ -20,17 +20,13 @@ if "history" not in st.session_state:
     st.session_state.history = []
 
 # =========================================================
-# CHECK TESSERACT
+# OCR CHECK
 # =========================================================
 
-def check_tesseract():
-    try:
-        return pytesseract.get_tesseract_version()
-    except:
-        return None
-
-if not check_tesseract():
-    st.error("Tesseract is not installed or not available.")
+try:
+    pytesseract.get_tesseract_version()
+except:
+    st.error("Tesseract is not installed or not in PATH.")
     st.stop()
 
 # =========================================================
@@ -39,105 +35,132 @@ if not check_tesseract():
 
 LANG = st.sidebar.selectbox("Language", ["BG", "EN"])
 
-t = {
+T = {
     "BG": {
         "title": "🥗 AI Скенер за Храна",
         "scan": "Сканирай",
         "text": "Текст",
-        "harmful": "Вредни вещества",
-        "safe": "Няма вредни вещества",
         "score": "Оценка",
         "risk": "Риск",
+        "harmful": "Вредни съставки",
+        "safe": "Няма опасни съставки",
         "insights": "Анализ"
     },
     "EN": {
         "title": "🥗 AI Food Scanner",
         "scan": "Scan",
         "text": "Text",
-        "harmful": "Harmful ingredients",
-        "safe": "No harmful ingredients",
         "score": "Score",
         "risk": "Risk",
+        "harmful": "Harmful ingredients",
+        "safe": "No harmful ingredients",
         "insights": "Insights"
     }
 }[LANG]
 
 # =========================================================
-# HARMFUL INGREDIENTS
+# HARMFUL E-NUMBERS (BG + EN)
 # =========================================================
 
-harmful_ingredients = {
-    "e621": {"name": "MSG", "risk": "Headache risk", "score": -15},
-    "e250": {"name": "Sodium Nitrite", "risk": "Cancer risk", "score": -25},
-    "aspartame": {"name": "Aspartame", "risk": "Sweetener risk", "score": -20},
-    "e102": {"name": "Tartrazine", "risk": "Hyperactivity risk", "score": -20},
-    "trans fat": {"name": "Trans Fat", "risk": "Heart disease risk", "score": -30}
+e_numbers = {
+    "e100": ("Curcumin", "Куркумин", -5, "Natural colorant", "Естествен оцветител"),
+    "e102": ("Tartrazine", "Тартразин", -20, "Hyperactivity risk", "Риск от хиперактивност"),
+    "e110": ("Sunset Yellow", "Сънсет жълто", -20, "Allergy risk", "Риск от алергии"),
+    "e120": ("Cochineal", "Кошенил", -15, "Allergy risk", "Алергичен риск"),
+
+    "e211": ("Sodium Benzoate", "Натриев бензоат", -15, "Preservative risk", "Консервант риск"),
+    "e220": ("Sulphur Dioxide", "Серен диоксид", -20, "Respiratory issues", "Дихателни проблеми"),
+    "e250": ("Sodium Nitrite", "Натриев нитрит", -30, "Cancer risk", "Риск от рак"),
+
+    "e320": ("BHA", "БХА", -25, "Possible carcinogen", "Възможен канцероген"),
+    "e321": ("BHT", "БХТ", -25, "Hormonal disruption", "Хормонален риск"),
+
+    "e407": ("Carrageenan", "Карагенан", -20, "Inflammation", "Възпаление"),
+    "e466": ("CMC", "Карбоксиметилцелулоза", -10, "Gut irritation", "Чревно дразнене")
 }
 
 # =========================================================
-# ALCOHOL DETECTION (NEW)
+# ALCOHOL (BG + EN)
 # =========================================================
 
 alcohol_keywords = {
-    "beer": {"score": -20, "risk": "Alcohol consumption detected"},
-    "wine": {"score": -25, "risk": "Alcohol consumption detected"},
-    "vodka": {"score": -30, "risk": "High alcohol content"},
-    "whiskey": {"score": -30, "risk": "High alcohol content"},
-    "rum": {"score": -30, "risk": "High alcohol content"},
-    "alcohol": {"score": -25, "risk": "Alcohol detected"},
-    "ethanol": {"score": -25, "risk": "Ethanol detected"}
+    "alcohol": -25, "ethanol": -25, "beer": -20,
+    "wine": -25, "vodka": -30, "whiskey": -30,
+    "rum": -30, "fermented": -15, "malt": -10,
+    "brew": -15,
+
+    "бира": -20, "алкохол": -25, "етанол": -25,
+    "вино": -25, "ракия": -30, "водка": -30,
+    "уиски": -30, "ферментирал": -15,
+    "малц": -10, "хмел": -10, "дрожди": -10
 }
 
 # =========================================================
-# SUGAR / NUTRIENT RULES
+# SUGAR / SWEETENERS / CARBS (NEW IMPORTANT PART)
 # =========================================================
 
-risk_rules = {
-    "sugar": (0, 5, 25, "High sugar intake risk"),
-    "syrup": (0, 5, 20, "High syrup content"),
-    "glucose": (0, 5, 20, "Fast sugar spike"),
-    "fructose": (0, 5, 20, "Metabolic sugar load")
+sugar_keywords = {
+    "sugar": -10,
+    "zahar": -10,
+    "захар": -10,
+    "glucose": -15,
+    "глюкоза": -15,
+    "fructose": -15,
+    "фруктоза": -15,
+    "syrup": -15,
+    "сироп": -15,
+    "corn syrup": -20,
+    "honey": -10,
+    "мед": -10,
+    "dextrose": -15
 }
 
 # =========================================================
-# ALLERGENS
+# OTHER ADDITIVES
 # =========================================================
 
-allergens = ["milk", "soy", "gluten", "nuts", "egg", "wheat"]
+additives = {
+    "flavor": -10,
+    "flavour": -10,
+    "aroma": -10,
+    "аромат": -10,
+    "color": -10,
+    "colour": -10,
+    "оцветител": -15,
+    "preservative": -10,
+    "консервант": -10
+}
 
 # =========================================================
-# IMAGE PREPROCESS
+# BEER LOGIC
 # =========================================================
 
-def preprocess(image):
-    img = np.array(image)
+def detect_beer_like(text):
 
-    h, w = img.shape[:2]
-    if w > 1200:
-        scale = 1200 / w
-        img = np.array(Image.fromarray(img).resize((int(w * scale), int(h * scale))))
+    signals = [
+        "malt", "barley", "hops",
+        "малц", "ечемик", "хмел",
+        "дрожди", "ферментирал"
+    ]
 
-    return Image.fromarray(img).convert("L")
+    hits = sum(1 for s in signals if s in text)
+
+    if hits >= 2:
+        return -25
+
+    return 0
 
 # =========================================================
 # OCR
 # =========================================================
 
 def extract_text(image):
-    try:
-        img = preprocess(image)
+    img = np.array(image)
+    gray = Image.fromarray(img).convert("L")
 
-        text = pytesseract.image_to_string(
-            img,
-            lang="eng",
-            config="--oem 3 --psm 6"
-        )
+    text = pytesseract.image_to_string(gray, lang="eng")
 
-        return re.sub(r"\s+", " ", text.lower()).strip()
-
-    except Exception as e:
-        st.error(f"OCR error: {e}")
-        return ""
+    return text.lower()
 
 # =========================================================
 # ANALYSIS ENGINE
@@ -149,51 +172,35 @@ def analyze(text):
     found = []
     insights = []
 
-    # E-numbers / harmful
-    for k, v in harmful_ingredients.items():
+    # E-NUMBERS
+    for k, v in e_numbers.items():
         if k in text:
-            found.append(v)
-            score += v["score"]
-            insights.append(f"{v['name']}: {v['risk']}")
+            found.append(v[0])
+            score += v[2]
+            insights.append(v[3] + " / " + v[4])
 
-    # ALCOHOL detection
+    # ALCOHOL
     for k, v in alcohol_keywords.items():
         if k in text:
-            found.append({"name": k, "risk": v["risk"]})
-            score += v["score"]
-            insights.append(v["risk"])
+            score += v
+            insights.append(f"Alcohol detected: {k}")
 
-    # SUGAR / nutrients
-    for k, (low, med, high_penalty, msg) in risk_rules.items():
+    # SUGAR SYSTEM
+    for k, v in sugar_keywords.items():
         if k in text:
-            if k == "sugar":
-                # rough estimation if number exists
-                match = re.search(r"sugar[^0-9]*([0-9]+)", text)
-                if match:
-                    val = int(match.group(1))
-                    if val > 25:
-                        score -= 25
-                        insights.append("High sugar (>25g) detected")
-                    elif val > 10:
-                        score -= 15
-                        insights.append("Medium sugar detected")
-                    else:
-                        insights.append("Low sugar detected")
-                else:
-                    score -= 10
-                    insights.append("Sugar detected (unknown amount)")
-            else:
-                score -= high_penalty
-                insights.append(msg)
+            score += v
+            insights.append(f"Sugar-related: {k}")
+
+    # ADDITIVES
+    for k, v in additives.items():
+        if k in text:
+            score += v
+            insights.append(f"Additive: {k}")
+
+    # BEER LOGIC
+    score += detect_beer_like(text)
 
     return found, max(0, min(100, score)), insights
-
-# =========================================================
-# ALLERGENS
-# =========================================================
-
-def detect_allergens(text):
-    return list({a for a in allergens if a in text})
 
 # =========================================================
 # RISK
@@ -210,7 +217,7 @@ def risk_label(score):
 # UI
 # =========================================================
 
-st.title(t["title"])
+st.title(T["title"])
 
 file = st.file_uploader("Upload image", type=["png", "jpg", "jpeg"])
 cam = st.camera_input("Camera")
@@ -230,46 +237,39 @@ if img:
 
     st.image(img, use_container_width=True)
 
-    if st.button(t["scan"], type="primary"):
+    if st.button(T["scan"], type="primary"):
 
-        with st.spinner("Analyzing..."):
+        with st.spinner("Scanning..."):
 
             text = extract_text(img)
             found, score, insights = analyze(text)
-            allergens_found = detect_allergens(text)
-            risk = risk_label(score)
 
         # TEXT
-        st.subheader(t["text"])
+        st.subheader(T["text"])
         st.text_area("", text, height=150)
 
         # SCORE
-        st.subheader(t["score"])
+        st.subheader(T["score"])
         st.progress(score / 100)
-        st.metric(t["risk"], risk)
+        st.metric(T["risk"], risk_label(score))
 
         # INSIGHTS
-        st.subheader(t["insights"])
+        st.subheader(T["insights"])
         for i in insights:
             st.info(i)
 
         # HARMFUL
-        st.subheader(t["harmful"])
+        st.subheader(T["harmful"])
         if found:
             for item in found:
-                st.warning(f"{item['name']} | {item['risk']}")
+                st.warning(item)
         else:
-            st.success(t["safe"])
-
-        # ALLERGENS
-        if allergens_found:
-            st.warning("Allergens: " + ", ".join(allergens_found))
+            st.success(T["safe"])
 
         # HISTORY
         st.session_state.history.append({
             "time": datetime.now(),
-            "score": score,
-            "risk": risk
+            "score": score
         })
 
         st.dataframe(pd.DataFrame(st.session_state.history))
