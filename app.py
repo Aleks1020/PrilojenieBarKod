@@ -2,7 +2,6 @@ import streamlit as st
 import numpy as np
 from PIL import Image
 import pandas as pd
-import cv2
 import re
 from datetime import datetime
 import pytesseract
@@ -27,24 +26,22 @@ if "history" not in st.session_state:
 # LANGUAGE
 # =========================================================
 
-LANGUAGES = {"BG": "bg", "EN": "en"}
-lang = st.sidebar.selectbox("Language", list(LANGUAGES.keys()))
-LANG = LANGUAGES[lang]
+LANG = st.sidebar.selectbox("Language", ["BG", "EN"])
 
 t = {
-    "bg": {
-        "title": "🥗 AI Скенер за Хранителни Съставки",
+    "BG": {
+        "title": "🥗 AI Скенер за Съставки",
         "scan": "Сканирай",
-        "text": "Текст",
+        "text": "Разпознат текст",
         "harmful": "Вредни вещества",
         "safe": "Няма опасни вещества",
         "score": "Оценка",
         "risk": "Риск"
     },
-    "en": {
-        "title": "🥗 AI Food Scanner",
+    "EN": {
+        "title": "🥗 AI Ingredient Scanner",
         "scan": "Scan",
-        "text": "Text",
+        "text": "Detected text",
         "harmful": "Harmful ingredients",
         "safe": "No harmful ingredients",
         "score": "Score",
@@ -53,41 +50,39 @@ t = {
 }[LANG]
 
 # =========================================================
-# EXTENDED HARMFUL DATABASE (BIG E-NUMBER SET)
+# FULL HARMFUL DATABASE (EXPANDED)
 # =========================================================
 
 harmful_ingredients = {
+    # PRESERVATIVES
+    "e200": {"name": "Sorbic Acid", "risk": "May cause irritation", "level": "low", "score": -10},
+    "e202": {"name": "Potassium Sorbate", "risk": "Possible allergies", "level": "low", "score": -10},
+    "e211": {"name": "Sodium Benzoate", "risk": "May form harmful compounds", "level": "medium", "score": -15},
+    "e220": {"name": "Sulfur Dioxide", "risk": "Asthma trigger", "level": "high", "score": -20},
+    "e250": {"name": "Sodium Nitrite", "risk": "Linked to cancer risk", "level": "high", "score": -25},
 
-    # ===== PRESERVATIVES =====
-    "e200": {"name": "Sorbic Acid", "risk": "May cause irritation", "score": -10},
-    "e202": {"name": "Potassium Sorbate", "risk": "Allergic reactions possible", "score": -10},
-    "e211": {"name": "Sodium Benzoate", "risk": "May form benzene in acid drinks", "score": -20},
-    "e220": {"name": "Sulfur Dioxide", "risk": "Asthma trigger", "score": -20},
-    "e223": {"name": "Sodium Metabisulfite", "risk": "Allergen for sensitive people", "score": -20},
-    "e250": {"name": "Sodium Nitrite", "risk": "Linked to cancer risk", "score": -25},
+    # FLAVOR ENHANCERS
+    "e621": {"name": "Monosodium Glutamate (MSG)", "risk": "May cause headaches", "level": "medium", "score": -15},
+    "e627": {"name": "Disodium Guanylate", "risk": "Flavor enhancer", "level": "low", "score": -10},
+    "e631": {"name": "Disodium Inosinate", "risk": "Flavor enhancer", "level": "low", "score": -10},
 
-    # ===== FLAVOR ENHANCERS =====
-    "e621": {"name": "MSG", "risk": "May cause headaches", "score": -15},
-    "e627": {"name": "Disodium Guanylate", "risk": "Flavor enhancer", "score": -10},
-    "e631": {"name": "Disodium Inosinate", "risk": "Flavor enhancer", "score": -10},
+    # COLORANTS
+    "e102": {"name": "Tartrazine", "risk": "Hyperactivity risk", "level": "high", "score": -20},
+    "e110": {"name": "Sunset Yellow", "risk": "Allergic reactions", "level": "high", "score": -20},
+    "e122": {"name": "Carmoisine", "risk": "May cause reactions", "level": "medium", "score": -15},
+    "e124": {"name": "Ponceau 4R", "risk": "Possible allergen", "level": "medium", "score": -15},
+    "e129": {"name": "Allura Red", "risk": "Hyperactivity risk", "level": "high", "score": -20},
 
-    # ===== COLORANTS =====
-    "e102": {"name": "Tartrazine", "risk": "Hyperactivity in children", "score": -20},
-    "e110": {"name": "Sunset Yellow", "risk": "Allergic reactions", "score": -20},
-    "e122": {"name": "Carmoisine", "risk": "May cause hyperactivity", "score": -15},
-    "e124": {"name": "Ponceau 4R", "risk": "Possible allergen", "score": -15},
-    "e129": {"name": "Allura Red", "risk": "Hyperactivity risk", "score": -20},
+    # SWEETENERS
+    "aspartame": {"name": "Aspartame", "risk": "Controversial sweetener", "level": "high", "score": -20},
+    "acesulfame": {"name": "Acesulfame K", "risk": "Artificial sweetener", "level": "medium", "score": -15},
+    "saccharin": {"name": "Saccharin", "risk": "Old sweetener", "level": "low", "score": -10},
 
-    # ===== SWEETENERS =====
-    "aspartame": {"name": "Aspartame", "risk": "Controversial sweetener", "score": -20},
-    "acesulfame": {"name": "Acesulfame K", "risk": "Artificial sweetener", "score": -15},
-    "saccharin": {"name": "Saccharin", "risk": "Old artificial sweetener", "score": -10},
+    # FATS
+    "trans fat": {"name": "Trans Fat", "risk": "Heart disease risk", "level": "high", "score": -30},
 
-    # ===== FATS =====
-    "trans fat": {"name": "Trans Fat", "risk": "Heart disease risk", "score": -30},
-
-    # ===== OTHER =====
-    "msg": {"name": "Monosodium Glutamate", "risk": "Headaches possible", "score": -15}
+    # COMMON SHORT FORM
+    "msg": {"name": "Monosodium Glutamate", "risk": "Headache risk", "level": "medium", "score": -15}
 }
 
 # =========================================================
@@ -97,28 +92,28 @@ harmful_ingredients = {
 allergens = ["milk", "soy", "gluten", "nuts", "egg", "wheat"]
 
 # =========================================================
-# OCR (OPTIMIZED)
+# IMAGE PREPROCESS (NO CV2)
 # =========================================================
 
 def preprocess(image):
 
     img = np.array(image)
 
+    # resize for stability
     h, w = img.shape[:2]
     if w > 1200:
         scale = 1200 / w
-        img = cv2.resize(img, (int(w * scale), int(h * scale)))
+        new_size = (int(w * scale), int(h * scale))
+        img = np.array(Image.fromarray(img).resize(new_size))
 
-    gray = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
-    gray = cv2.bilateralFilter(gray, 9, 75, 75)
-    gray = cv2.convertScaleAbs(gray, alpha=1.3, beta=10)
+    # grayscale
+    img = Image.fromarray(img).convert("L")
 
-    return cv2.adaptiveThreshold(
-        gray, 255,
-        cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
-        cv2.THRESH_BINARY,
-        31, 2
-    )
+    return img
+
+# =========================================================
+# OCR
+# =========================================================
 
 def extract_text(image):
 
@@ -133,7 +128,8 @@ def extract_text(image):
             config=config
         )
 
-        return re.sub(r'\s+', ' ', text.lower()).strip()
+        text = re.sub(r'\s+', ' ', text.lower()).strip()
+        return text
 
     except Exception as e:
         st.error(f"OCR error: {e}")
@@ -149,7 +145,6 @@ def analyze(text):
     score = 100
 
     for key, data in harmful_ingredients.items():
-
         if key in text:
             found.append(data)
             score += data["score"]
@@ -174,7 +169,7 @@ def risk_label(score):
 
 st.title(t["title"])
 
-file = st.file_uploader("Upload", type=["png", "jpg", "jpeg"])
+file = st.file_uploader("Upload image", type=["png", "jpg", "jpeg"])
 cam = st.camera_input("Camera")
 
 img = None
@@ -215,7 +210,7 @@ if img:
 
         if found:
             for item in found:
-                st.error(f"{item['name']} → {item['risk']}")
+                st.error(f"{item['name']} | {item['risk']} | {item['level'].upper()}")
         else:
             st.success(t["safe"])
 
